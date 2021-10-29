@@ -16,6 +16,7 @@ package iptables_test
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -1781,8 +1782,11 @@ func TestNAT(t *testing.T) {
 }
 
 func TestNATICMPError(t *testing.T) {
-	const srcPort = 1234
-	const dstPort = 5432
+	const (
+		srcPort  = 1234
+		dstPort  = 5432
+		dataSize = 4
+	)
 
 	type icmpTypeTest struct {
 		name           string
@@ -1875,9 +1879,10 @@ func TestNATICMPError(t *testing.T) {
 					name:  "UDP",
 					proto: header.UDPProtocolNumber,
 					buf: func() buffer.View {
-						totalLen := header.IPv4MinimumSize + header.UDPMinimumSize
+						udpSize := header.UDPMinimumSize + dataSize
+						totalLen := header.IPv4MinimumSize + udpSize
 						hdr := buffer.NewPrependable(totalLen)
-						udp := header.UDP(hdr.Prepend(header.UDPMinimumSize))
+						udp := header.UDP(hdr.Prepend(udpSize))
 						udp.SetSourcePort(srcPort)
 						udp.SetDestinationPort(dstPort)
 						udp.SetChecksum(0)
@@ -1910,9 +1915,10 @@ func TestNATICMPError(t *testing.T) {
 					name:  "TCP",
 					proto: header.TCPProtocolNumber,
 					buf: func() buffer.View {
-						totalLen := header.IPv4MinimumSize + header.TCPMinimumSize
+						tcpSize := header.TCPMinimumSize + dataSize
+						totalLen := header.IPv4MinimumSize + tcpSize
 						hdr := buffer.NewPrependable(totalLen)
-						tcp := header.TCP(hdr.Prepend(header.TCPMinimumSize))
+						tcp := header.TCP(hdr.Prepend(tcpSize))
 						tcp.SetSourcePort(srcPort)
 						tcp.SetDestinationPort(dstPort)
 						tcp.SetDataOffset(header.TCPMinimumSize)
@@ -2016,8 +2022,9 @@ func TestNATICMPError(t *testing.T) {
 					name:  "UDP",
 					proto: header.UDPProtocolNumber,
 					buf: func() buffer.View {
-						hdr := buffer.NewPrependable(header.IPv6MinimumSize + header.UDPMinimumSize)
-						udp := header.UDP(hdr.Prepend(header.UDPMinimumSize))
+						udpSize := header.UDPMinimumSize + dataSize
+						hdr := buffer.NewPrependable(header.IPv6MinimumSize + udpSize)
+						udp := header.UDP(hdr.Prepend(udpSize))
 						udp.SetSourcePort(srcPort)
 						udp.SetDestinationPort(dstPort)
 						udp.SetChecksum(0)
@@ -2028,7 +2035,7 @@ func TestNATICMPError(t *testing.T) {
 							uint16(len(udp)),
 						)))
 						ip6Hdr(hdr.Prepend(header.IPv6MinimumSize),
-							header.UDPMinimumSize,
+							len(udp),
 							header.UDPProtocolNumber,
 							utils.Host2IPv6Addr.AddressWithPrefix.Address,
 							utils.RouterNIC2IPv6Addr.AddressWithPrefix.Address,
@@ -2050,8 +2057,9 @@ func TestNATICMPError(t *testing.T) {
 					name:  "TCP",
 					proto: header.TCPProtocolNumber,
 					buf: func() buffer.View {
-						hdr := buffer.NewPrependable(header.IPv6MinimumSize + header.TCPMinimumSize)
-						tcp := header.TCP(hdr.Prepend(header.TCPMinimumSize))
+						tcpSize := header.TCPMinimumSize + dataSize
+						hdr := buffer.NewPrependable(header.IPv6MinimumSize + tcpSize)
+						tcp := header.TCP(hdr.Prepend(tcpSize))
 						tcp.SetSourcePort(srcPort)
 						tcp.SetDestinationPort(dstPort)
 						tcp.SetDataOffset(header.TCPMinimumSize)
@@ -2063,7 +2071,7 @@ func TestNATICMPError(t *testing.T) {
 							uint16(len(tcp)),
 						)))
 						ip6Hdr(hdr.Prepend(header.IPv6MinimumSize),
-							header.TCPMinimumSize,
+							len(tcp),
 							header.TCPProtocolNumber,
 							utils.Host2IPv6Addr.AddressWithPrefix.Address,
 							utils.RouterNIC2IPv6Addr.AddressWithPrefix.Address,
@@ -2123,103 +2131,114 @@ func TestNATICMPError(t *testing.T) {
 				t.Run(transportType.name, func(t *testing.T) {
 					for _, icmpType := range test.icmpTypes {
 						t.Run(icmpType.name, func(t *testing.T) {
-							s := stack.New(stack.Options{
-								NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
-								TransportProtocols: []stack.TransportProtocolFactory{udp.NewProtocol, tcp.NewProtocol},
-							})
+							for _, trimEmbedded := range []bool{true, false} {
+								t.Run(fmt.Sprintf("TrimEmbedded=%t", trimEmbedded), func(t *testing.T) {
+									s := stack.New(stack.Options{
+										NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
+										TransportProtocols: []stack.TransportProtocolFactory{udp.NewProtocol, tcp.NewProtocol},
+									})
 
-							ep1 := channel.New(1, header.IPv6MinimumMTU, "")
-							ep2 := channel.New(1, header.IPv6MinimumMTU, "")
-							utils.SetupRouterStack(t, s, ep1, ep2)
+									ep1 := channel.New(1, header.IPv6MinimumMTU, "")
+									ep2 := channel.New(1, header.IPv6MinimumMTU, "")
+									utils.SetupRouterStack(t, s, ep1, ep2)
 
-							ipv6 := test.netProto == ipv6.ProtocolNumber
-							ipt := s.IPTables()
+									ipv6 := test.netProto == ipv6.ProtocolNumber
+									ipt := s.IPTables()
 
-							table := stack.Table{
-								Rules: []stack.Rule{
-									// Prerouting
-									{
-										Filter: stack.IPHeaderFilter{
-											Protocol:       transportType.proto,
-											CheckProtocol:  true,
-											InputInterface: utils.RouterNIC2Name,
+									table := stack.Table{
+										Rules: []stack.Rule{
+											// Prerouting
+											{
+												Filter: stack.IPHeaderFilter{
+													Protocol:       transportType.proto,
+													CheckProtocol:  true,
+													InputInterface: utils.RouterNIC2Name,
+												},
+												Target: &stack.DNATTarget{NetworkProtocol: test.netProto, Addr: test.host1Addr, Port: dstPort},
+											},
+											{
+												Target: &stack.AcceptTarget{},
+											},
+
+											// Input
+											{
+												Target: &stack.AcceptTarget{},
+											},
+
+											// Forward
+											{
+												Target: &stack.AcceptTarget{},
+											},
+
+											// Output
+											{
+												Target: &stack.AcceptTarget{},
+											},
+
+											// Postrouting
+											{
+												Filter: stack.IPHeaderFilter{
+													Protocol:        transportType.proto,
+													CheckProtocol:   true,
+													OutputInterface: utils.RouterNIC1Name,
+												},
+												Target: &stack.MasqueradeTarget{NetworkProtocol: test.netProto},
+											},
+											{
+												Target: &stack.AcceptTarget{},
+											},
 										},
-										Target: &stack.DNATTarget{NetworkProtocol: test.netProto, Addr: test.host1Addr, Port: dstPort},
-									},
-									{
-										Target: &stack.AcceptTarget{},
-									},
-
-									// Input
-									{
-										Target: &stack.AcceptTarget{},
-									},
-
-									// Forward
-									{
-										Target: &stack.AcceptTarget{},
-									},
-
-									// Output
-									{
-										Target: &stack.AcceptTarget{},
-									},
-
-									// Postrouting
-									{
-										Filter: stack.IPHeaderFilter{
-											Protocol:        transportType.proto,
-											CheckProtocol:   true,
-											OutputInterface: utils.RouterNIC1Name,
+										BuiltinChains: [stack.NumHooks]int{
+											stack.Prerouting:  0,
+											stack.Input:       2,
+											stack.Forward:     3,
+											stack.Output:      4,
+											stack.Postrouting: 5,
 										},
-										Target: &stack.MasqueradeTarget{NetworkProtocol: test.netProto},
-									},
+									}
+
+									if err := ipt.ReplaceTable(stack.NATID, table, ipv6); err != nil {
+										t.Fatalf("ipt.ReplaceTable(%d, _, %t): %s", stack.NATID, ipv6, err)
+									}
+
+									buf := transportType.buf
+
+									ep2.InjectInbound(test.netProto, stack.NewPacketBuffer(stack.PacketBufferOptions{
+										Data: append(buffer.View(nil), buf...).ToVectorisedView(),
+									}))
+
 									{
-										Target: &stack.AcceptTarget{},
-									},
-								},
-								BuiltinChains: [stack.NumHooks]int{
-									stack.Prerouting:  0,
-									stack.Input:       2,
-									stack.Forward:     3,
-									stack.Output:      4,
-									stack.Postrouting: 5,
-								},
-							}
+										pkt, ok := ep1.Read()
+										if !ok {
+											t.Fatal("expected to read a packet on ep1")
+										}
+										pktView := stack.PayloadSince(pkt.Pkt.NetworkHeader())
+										transportType.checkNATed(t, pktView)
+										if t.Failed() {
+											t.FailNow()
+										}
 
-							if err := ipt.ReplaceTable(stack.NATID, table, ipv6); err != nil {
-								t.Fatalf("ipt.ReplaceTable(%d, _, %t): %s", stack.NATID, ipv6, err)
-							}
+										if trimEmbedded {
+											pktView = pktView[:len(pktView)-dataSize]
+											buf = buf[:len(buf)-dataSize]
+										}
 
-							ep2.InjectInbound(test.netProto, stack.NewPacketBuffer(stack.PacketBufferOptions{
-								Data: append(buffer.View(nil), transportType.buf...).ToVectorisedView(),
-							}))
+										ep1.InjectInbound(test.netProto, stack.NewPacketBuffer(stack.PacketBufferOptions{
+											Data: test.icmpError(t, pktView, icmpType.val).ToVectorisedView(),
+										}))
+									}
 
-							{
-								pkt, ok := ep1.Read()
-								if !ok {
-									t.Fatal("expected to read a packet on ep1")
-								}
-								pktView := stack.PayloadSince(pkt.Pkt.NetworkHeader())
-								transportType.checkNATed(t, pktView)
-								if t.Failed() {
-									t.FailNow()
-								}
-
-								ep1.InjectInbound(test.netProto, stack.NewPacketBuffer(stack.PacketBufferOptions{
-									Data: test.icmpError(t, pktView, icmpType.val).ToVectorisedView(),
-								}))
+									pkt, ok := ep2.Read()
+									if ok != icmpType.expectResponse {
+										t.Fatalf("got ep2.Read() = (%#v, %t), want = (_, %t)", pkt, ok, icmpType.expectResponse)
+									}
+									if !icmpType.expectResponse {
+										return
+									}
+									test.decrementTTL(buf)
+									test.checkNATedError(t, stack.PayloadSince(pkt.Pkt.NetworkHeader()), buf, icmpType.val)
+								})
 							}
-
-							pkt, ok := ep2.Read()
-							if ok != icmpType.expectResponse {
-								t.Fatalf("got ep2.Read() = (%#v, %t), want = (_, %t)", pkt, ok, icmpType.expectResponse)
-							}
-							if !icmpType.expectResponse {
-								return
-							}
-							test.decrementTTL(transportType.buf)
-							test.checkNATedError(t, stack.PayloadSince(pkt.Pkt.NetworkHeader()), transportType.buf, icmpType.val)
 						})
 					}
 				})

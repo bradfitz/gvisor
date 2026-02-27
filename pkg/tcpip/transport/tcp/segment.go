@@ -90,6 +90,22 @@ type segment struct {
 
 	// lost indicates if the segment is marked as lost by RACK.
 	lost bool
+
+	// deliveredAtSend is the total delivered byte count when this segment
+	// was (first) sent. Used for delivery rate estimation.
+	deliveredAtSend int64
+
+	// deliveredTimeAtSend is the time at which delivered was last updated
+	// when this segment was (first) sent.
+	deliveredTimeAtSend tcpip.MonotonicTime
+
+	// firstSentTimeAtSend is the send time of the most recently sent data
+	// packet at the time this segment was (first) sent.
+	firstSentTimeAtSend tcpip.MonotonicTime
+
+	// isAppLimitedAtSend indicates whether the connection was
+	// application-limited when this segment was sent.
+	isAppLimitedAtSend bool
 }
 
 func newIncomingSegment(id stack.TransportEndpointID, clock tcpip.Clock, pkt *stack.PacketBuffer) (*segment, error) {

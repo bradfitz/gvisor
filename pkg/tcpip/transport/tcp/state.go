@@ -93,6 +93,50 @@ type TCPCubicState struct {
 	RoundStart tcpip.MonotonicTime
 }
 
+// TCPBBRState is used to hold a copy of the internal BBR state when the
+// TCPProbeFunc is invoked.
+//
+// +stateify savable
+type TCPBBRState struct {
+	// Mode is the current BBR mode (Startup=0, Drain=1, ProbeBW=2,
+	// ProbeRTT=3).
+	Mode uint8
+
+	// ProbeBWPhase is the current ProbeBW sub-phase (Down=0, Cruise=1,
+	// Refill=2, Up=3).
+	ProbeBWPhase uint8
+
+	// BtlBw is the estimated bottleneck bandwidth in bytes/second.
+	BtlBw int64
+
+	// RTprop is the estimated minimum round-trip propagation delay.
+	RTprop time.Duration
+
+	// PacingGain is the current pacing gain (scaled x1000).
+	PacingGain int
+
+	// CwndGain is the current cwnd gain (scaled x1000).
+	CwndGain int
+
+	// InFlightLo is the short-term lower bound on inflight data.
+	InFlightLo int
+
+	// InFlightHi is the upper bound on inflight data from ProbeUp.
+	InFlightHi int
+
+	// BwLo is the short-term lower bound on bandwidth.
+	BwLo int64
+
+	// RoundCount is the count of packet-timed round trips.
+	RoundCount int64
+
+	// FullBwCount is the number of rounds without sufficient BW growth.
+	FullBwCount uint8
+
+	// FullBw is the max bandwidth seen in recent rounds for Startup exit.
+	FullBw int64
+}
+
 // TCPRACKState is used to hold a copy of the internal RACK state when the
 // TCPProbeFunc is invoked.
 //
@@ -307,6 +351,9 @@ type TCPSenderState struct {
 
 	// Cubic holds the state related to CUBIC congestion control.
 	Cubic TCPCubicState
+
+	// BBR holds the state related to BBR congestion control.
+	BBR TCPBBRState
 
 	// RACKState holds the state related to RACK loss detection algorithm.
 	RACKState TCPRACKState

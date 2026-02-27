@@ -81,6 +81,12 @@ type congestionControl interface {
 	// recovery phase. This provides congestion control algorithms a way
 	// to adjust their state when exiting recovery.
 	PostRecovery()
+
+	// CustomRecovery returns true if the congestion control algorithm
+	// manages its own cwnd during loss recovery (e.g. BBR). When true,
+	// the sender will not override SndCwnd on entering/leaving recovery
+	// and will call Update even during fast recovery.
+	CustomRecovery() bool
 }
 
 // lossRecovery is an interface that must be implemented by any supported
@@ -155,6 +161,9 @@ type sender struct {
 
 	// cc is the congestion control algorithm in use for this sender.
 	cc congestionControl
+
+	// drt tracks delivery rate for BBR congestion control.
+	drt deliveryRateTracker
 
 	// rc has the fields needed for implementing RACK loss detection
 	// algorithm.
@@ -328,6 +337,8 @@ func (s *sender) initCongestionControl(congestionControlName tcpip.CongestionCon
 	s.Ssthresh = InitialSsthresh
 
 	switch congestionControlName {
+	case ccBBR:
+		return newBBRCC(s)
 	case ccCubic:
 		return newCubicCC(s)
 	case ccReno:
@@ -1107,6 +1118,12 @@ func (s *sender) sendData() {
 		s.updateWriteNext(seg.Next())
 	}
 
+	// Mark the connection as app-limited if we have no more data to send
+	// and the congestion window is not fully utilized.
+	if s.writeNext == nil && s.Outstanding < s.SndCwnd {
+		s.drt.setAppLimited(int64(s.Outstanding) * int64(s.MaxPayloadSize))
+	}
+
 	s.postXmit(dataSent, true /* shouldScheduleProbe */)
 }
 
@@ -1125,7 +1142,9 @@ func (s *sender) enterRecovery() {
 	// See : https://tools.ietf.org/html/rfc5681#section-3.2 Step 3.
 	// We inflate the cwnd by 3 to account for the 3 packets which triggered
 	// the 3 duplicate ACKs and are now not in flight.
-	s.SndCwnd = s.Ssthresh + 3
+	if !s.cc.CustomRecovery() {
+		s.SndCwnd = s.Ssthresh + 3
+	}
 	s.SackedOut = 0
 	s.DupAckCount = 0
 	s.FastRecovery.First = s.SndUna
@@ -1161,7 +1180,9 @@ func (s *sender) leaveRecovery() {
 	s.DupAckCount = 0
 
 	// Deflate cwnd. It had been artificially inflated when new dups arrived.
-	s.SndCwnd = s.Ssthresh
+	if !s.cc.CustomRecovery() {
+		s.SndCwnd = s.Ssthresh
+	}
 	s.cc.PostRecovery()
 }
 
@@ -1673,6 +1694,10 @@ func (s *sender) handleRcvdSegment(rcvdSeg *segment) {
 				s.rc.detectReorder(seg)
 			}
 
+			// Compute delivery rate sample for BBR before removing
+			// the segment.
+			s.drt.onAck(seg, s.ep.stack.Clock().NowMonotonic())
+
 			s.writeList.Remove(seg)
 
 			// If SACK is enabled then only reduce outstanding if
@@ -1697,7 +1722,9 @@ func (s *sender) handleRcvdSegment(rcvdSeg *segment) {
 
 		// If we are not in fast recovery then update the congestion
 		// window based on the number of acknowledged packets.
-		if !s.FastRecovery.Active {
+		// For CC algorithms with custom recovery (e.g. BBR), also
+		// call Update during recovery so they can track delivery rate.
+		if !s.FastRecovery.Active || s.cc.CustomRecovery() {
 			s.cc.Update(originalOutstanding-s.Outstanding, bestRTT)
 			if s.FastRecovery.Last.LessThan(s.SndUna) {
 				s.state = tcpip.Open
@@ -1790,6 +1817,9 @@ func (s *sender) sendSegment(seg *segment) tcpip.Error {
 	seg.xmitTime = s.ep.stack.Clock().NowMonotonic()
 	seg.xmitCount++
 	seg.lost = false
+
+	// Stamp delivery rate state on first transmission.
+	s.drt.onSend(seg)
 
 	err := s.sendSegmentFromPacketBuffer(seg.pkt, seg.flags, seg.sequenceNumber)
 

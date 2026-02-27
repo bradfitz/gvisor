@@ -83,6 +83,7 @@ const (
 const (
 	ccReno  = "reno"
 	ccCubic = "cubic"
+	ccBBR   = "bbr"
 )
 
 // +stateify savable
@@ -558,6 +559,11 @@ func NewProtocolCUBIC(s *stack.Stack) stack.TransportProtocol {
 	return newProtocol(s, ccCubic, nil)
 }
 
+// NewProtocolBBR returns a TCP transport protocol with BBR congestion control.
+func NewProtocolBBR(s *stack.Stack) stack.TransportProtocol {
+	return newProtocol(s, ccBBR, nil)
+}
+
 func newProtocol(s *stack.Stack, cc string, probe TCPProbeFunc) stack.TransportProtocol {
 	rng := s.SecureRNG()
 	var seqnumSecret [16]byte
@@ -582,7 +588,7 @@ func newProtocol(s *stack.Stack, cc string, probe TCPProbeFunc) stack.TransportP
 		},
 		sackEnabled:                true,
 		congestionControl:          cc,
-		availableCongestionControl: []string{ccReno, ccCubic},
+		availableCongestionControl: []string{ccReno, ccCubic, ccBBR},
 		moderateReceiveBuffer:      true,
 		lingerTimeout:              DefaultTCPLingerTimeout,
 		timeWaitTimeout:            DefaultTCPTimeWaitTimeout,

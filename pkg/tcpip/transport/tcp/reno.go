@@ -117,3 +117,8 @@ func (r *renoState) HandleRTOExpired() {
 func (r *renoState) PostRecovery() {
 	// noop.
 }
+
+// CustomRecovery implements congestionControl.CustomRecovery.
+func (r *renoState) CustomRecovery() bool {
+	return false
+}

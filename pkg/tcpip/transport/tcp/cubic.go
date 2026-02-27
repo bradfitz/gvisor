@@ -309,6 +309,11 @@ func (c *cubicState) PostRecovery() {
 	c.T = c.s.ep.stack.Clock().NowMonotonic()
 }
 
+// CustomRecovery implements congestionControl.CustomRecovery.
+func (c *cubicState) CustomRecovery() bool {
+	return false
+}
+
 // reduceSlowStartThreshold returns new SsThresh as described in
 // https://tools.ietf.org/html/rfc8312#section-4.7.
 //

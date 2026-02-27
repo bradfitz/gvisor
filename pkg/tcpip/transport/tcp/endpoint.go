@@ -3206,6 +3206,23 @@ func (e *Endpoint) completeStateLocked(s *TCPEndpointState) {
 		s.Sender.Cubic.TimeSinceLastCongestion = e.stack.Clock().NowMonotonic().Sub(s.Sender.Cubic.T)
 	}
 
+	if bbr, ok := e.snd.cc.(*bbrState); ok {
+		s.Sender.BBR = TCPBBRState{
+			Mode:         bbr.mode,
+			ProbeBWPhase: bbr.probeBWPhase,
+			BtlBw:        bbr.btlBwFilter.getBest(),
+			RTprop:       bbr.rtProp(),
+			PacingGain:   bbr.pacingGain,
+			CwndGain:     bbr.cwndGain,
+			InFlightLo:   bbr.inflightLo,
+			InFlightHi:   bbr.inflightHi,
+			BwLo:         bbr.bwLo,
+			RoundCount:   bbr.roundCount,
+			FullBwCount:  bbr.fullBwCount,
+			FullBw:       bbr.fullBw,
+		}
+	}
+
 	s.Sender.RACKState = e.snd.rc.TCPRACKState
 	s.Sender.RetransmitTS = e.snd.retransmitTS
 	s.Sender.SpuriousRecovery = e.snd.spuriousRecovery

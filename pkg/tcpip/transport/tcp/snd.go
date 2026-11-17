@@ -1395,18 +1395,32 @@ func (s *sender) walkSACK(rcvdSeg *segment) bool {
 		return hasDSACK
 	}
 
-	// Sort the SACK blocks. The first block is the most recent unacked
-	// block. The following blocks can be in arbitrary order.
+	// Sort the SACK blocks into ascending order. The first block is the most
+	// recent unacked block. The following blocks can be in arbitrary order.
+	//
+	// The order must be ascending because the loop below makes a single
+	// forward pass over the write list for all of the blocks. In descending
+	// order the pass for the highest block would leave seg beyond every other
+	// block, and only the highest block would ever be applied. A segment in a
+	// lower block would then only be marked as SACKed if an earlier ACK had
+	// reported it in its highest block, and a receiver reports each range
+	// that way just once per arriving segment, so losing those ACKs is enough
+	// to leave delivered segments looking undelivered to RACK.
 	sackBlocks := make([]header.SACKBlock, n)
 	copy(sackBlocks, rcvdSeg.parsedOptions.SACKBlocks[idx:])
 	sort.Slice(sackBlocks, func(i, j int) bool {
-		return sackBlocks[j].Start.LessThan(sackBlocks[i].Start)
+		return sackBlocks[i].Start.LessThan(sackBlocks[j].Start)
 	})
 
 	seg := s.writeList.Front()
 	for _, sb := range sackBlocks {
 		for seg != nil && seg.sequenceNumber.LessThan(sb.End) && seg.xmitCount != 0 {
-			if sb.Start.LessThanEq(seg.sequenceNumber) && !seg.acked {
+			// Only a segment that the block covers completely has been
+			// received. A block can end inside a segment, for instance
+			// when it reports data sent before the segments were last
+			// resized.
+			segEnd := seg.sequenceNumber.Add(seqnum.Size(seg.payloadSize()))
+			if sb.Start.LessThanEq(seg.sequenceNumber) && segEnd.LessThanEq(sb.End) && !seg.acked {
 				s.rc.update(seg, rcvdSeg)
 				s.rc.detectReorder(seg)
 				seg.acked = true

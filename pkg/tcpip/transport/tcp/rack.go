@@ -64,6 +64,12 @@ type rackControl struct {
 	// receiving an ACK and is reset during updating of reorder window.
 	exitedRecovery bool
 
+	// priorFACK is the value FACK had before the ACK currently being
+	// processed. It is what newly acknowledged segments are compared with
+	// to detect reordering; see detectReorder. It is set at the start of
+	// processing each ACK, so it need not be saved.
+	priorFACK seqnum.Value `state:"nosave"`
+
 	// minRTT is the estimated minimum RTT of the connection.
 	minRTT time.Duration
 
@@ -157,14 +163,25 @@ func (rc *rackControl) update(seg *segment, ackSeg *segment) {
 //     RACK.fack is (selectively or cumulatively) acknowledged, it has been
 //     delivered out of order. The sender sets RACK.reord to TRUE if such segment
 //     is identified.
+//
+// The comparison is with the value RACK.fack had before the ACK being
+// processed, as in Linux, which passes tcp_clean_rtx_queue the prior_fack
+// from the start of tcp_ack. An ACK can both advance the cumulative
+// acknowledgement and carry a SACK block for data above a hole: that is what
+// a receiver sends when the first segment after a loss arrives while it is
+// delaying the ACK of the segments before the loss. The SACK block is
+// processed first and raises RACK.fack, so comparing with the current value
+// would take the cumulatively acknowledged segments, which arrived in order,
+// for segments delivered out of order. RACK.reord is never cleared, so one
+// such ACK would make every later fast retransmit on the connection wait out
+// a reordering window.
 func (rc *rackControl) detectReorder(seg *segment) {
 	endSeq := seg.sequenceNumber.Add(seqnum.Size(seg.payloadSize()))
 	if rc.FACK.LessThan(endSeq) {
 		rc.FACK = endSeq
-		return
 	}
 
-	if endSeq.LessThan(rc.FACK) && seg.xmitCount == 1 {
+	if endSeq.LessThan(rc.priorFACK) && seg.xmitCount == 1 {
 		rc.Reord = true
 	}
 }

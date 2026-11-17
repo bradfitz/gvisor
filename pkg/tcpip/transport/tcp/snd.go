@@ -1560,6 +1560,10 @@ func (s *sender) inRecovery() bool {
 func (s *sender) handleRcvdSegment(rcvdSeg *segment) {
 	bestRTT := unknownRTT
 
+	// Remember the highest sequence number that earlier ACKs acknowledged,
+	// for detecting reordering among the segments this one acknowledges.
+	s.rc.priorFACK = s.rc.FACK
+
 	// Check if we can extract an RTT measurement from this ack. Measure against
 	// the ACK's ingress time (rcvdSeg.rcvdTime), not the current clock: if the
 	// ACK was delayed inside the stack before being processed (e.g. queued while

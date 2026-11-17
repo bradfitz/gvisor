@@ -1170,7 +1170,12 @@ func (s *sender) enterRecovery() {
 	// We inflate the cwnd by 3 to account for the 3 packets which triggered
 	// the 3 duplicate ACKs and are now not in flight.
 	s.SndCwnd = s.Ssthresh + 3
-	s.SackedOut = 0
+	// SackedOut is not reset here. It counts the segments in the write list
+	// that are marked as SACKed, and those stay in the list, still marked,
+	// until they are cumulatively acknowledged, at which point each is
+	// subtracted. Zeroing the count on the way into recovery made it
+	// negative from the first recovery on, so that RACK never again saw the
+	// DupThresh SACKed segments that let it skip the reordering window.
 	s.DupAckCount = 0
 	s.FastRecovery.First = s.SndUna
 	s.FastRecovery.Last = s.SndNxt - 1
@@ -1752,7 +1757,10 @@ func (s *sender) handleRcvdSegment(rcvdSeg *segment) {
 			// already been accounted for in SetPipe().
 			if !s.ep.SACKPermitted || !s.ep.scoreboard.IsSACKED(seg.sackBlock()) {
 				s.Outstanding -= s.pCount(seg, s.MaxPayloadSize)
-			} else {
+			}
+			// Undo the segment's contribution to SackedOut, which walkSACK
+			// made when it marked the segment.
+			if seg.acked {
 				s.SackedOut -= s.pCount(seg, s.MaxPayloadSize)
 			}
 			seg.DecRef()
